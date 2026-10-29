@@ -1,0 +1,12 @@
+{
+  "name": "PBZ Full Mapping File",
+  "folder": "phantombladezero_pbzusmap",
+  "author": "Kintaro",
+  "version": "1.0",
+  "description": "A full mapping file (.usmap) for Phantom Blade Zero: every native type and every Blueprint class, struct and enum of the game.",
+  "kind": "usmap",
+  "game": "phantombladezero",
+  "gameVersion": "CL-301524_JKS-17219",
+  "engine": "UE5_7",
+  "usmapName": "ProjectPBZ-5.7.4-301524-full"
+}

@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.usmap binary
+*.zip binary
+*.png binary

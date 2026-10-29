@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openmods.nexus/openmods.schema.json",
+  "openmods": 1,
+  "name": "USMAP File (Proper)",
+  "summary": "Full mapping file (.usmap) for Phantom Blade Zero: every native type plus every Blueprint class, struct and enum of the game's packages.",
+  "games": ["phantom-blade-zero"],
+  "tags": ["tools"],
+  "gameVersions": ["Release (Steam build 26266538)"],
+  "cover": "docs/cover.png"
+}

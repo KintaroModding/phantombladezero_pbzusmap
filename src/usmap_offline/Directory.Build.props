@@ -1,0 +1,6 @@
+<Project>
+  <!-- Build files go to the project's dist\work\obj, not next to the sources (dist is not part of the repository). -->
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\..\dist\work\obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>
