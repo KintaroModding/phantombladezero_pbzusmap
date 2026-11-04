@@ -9,7 +9,7 @@ A full mapping file (`.usmap`) for Phantom Blade Zero, and the code that makes i
 |---|---|
 | `usmap_io.py` | Reads and writes mapping files: usmap version 4 with the CEXT block and the PPTH and EATR extensions, as UE4SS writes them; reads versions 0 to 4. The usmap type names of Unreal's property classes |
 | `process_memory.py` | Read-only access to a running process (find it, find its exe module, read memory) |
-| `usmap_live.py` | A mapping file from the running game, read from outside: the same objects, types and rules as UE4SS's mapping generator, with the Blueprint types that are loaded at that moment. `--native-only`: native types only. Holds Phantom Blade Zero's engine layout and the addresses of Steam build 26266538 |
+| `usmap_live.py` | A mapping file from the running game, read from outside: the same objects, types and rules as UE4SS's mapping generator, with the Blueprint types that are loaded at that moment. `--native-only`: native types only. Holds Phantom Blade Zero's engine layout; finds GUObjectArray and the FName block table for the running game build |
 | `usmap_offline\` | C# console tool on CUE4Parse: reads every class, struct and enum export of all packages and writes one JSON line per type. `--probe <text>` lists the exports of matching packages; `--readtest <step>` reads every export of a sample of gameplay packages with a given mapping file |
 | `usmap_offline.py` | Turns those JSON lines into a mapping file by UE4SS's rules (sorted, so a build gives the same bytes each time) |
 | `usmap_merge.py` | Merges mapping files into one with each name once (native first, then the most common schema; names compared without case) and a last pass that keeps every reference readable; writes a `.merge.txt` report |
@@ -19,7 +19,7 @@ A full mapping file (`.usmap`) for Phantom Blade Zero, and the code that makes i
 
 `build.ps1` runs the whole chain: it builds `src\usmap_offline` (`dotnet build`), reads the packages into
 `dist\work\packages.jsonl`, converts them (`dist\work\packages.usmap`), merges the native dump, the live dumps and
-the package types into `dist\ProjectPBZ-5.7.4-301524-full.usmap`, and writes `dist\phantombladezero_pbzusmap_<version>.zip`
+the package types into `dist\<usmapName>.usmap` (`usmapName` in `mod.json`), and writes `dist\phantombladezero_pbzusmap_<version>.zip`
 and `dist\SHA256SUMS.txt`.
 
 ```powershell
@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -PaksDir <game>\ProjectPBZ\
   the .NET 10 SDK (CUE4Parse 1.2.2.202610 targets net10.0), and `oo2core_9_win64.dll` (Oodle; the retoc release
   has it).
 - The native dump: `python -I src\usmap_live.py <path of the running PBZ.exe> native.usmap --native-only`, or UE4SS's
-  Ctrl+Num6 with `DumpUSMAP(false)`. Live dumps (`usmap_live.py` without `--native-only`) are optional: they add the
+  `DumpUSMAP(false)`. Live dumps (`usmap_live.py` without `--native-only`) are optional: they add the
   runtime flags of the loaded types and the transient types that exist only in memory.
 - In the modding base folder of the author, the defaults come from the shared `_tools` folder (`$env:UE5_TOOLS`
   overrides it): the game's path and AES key from `_tools\gamedata\phantombladezero\game.json`, the dumps from
@@ -46,17 +46,18 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -PaksDir <game>\ProjectPBZ\
 
 ## Tests
 
-`python -I tests\test_usmap.py`: offline tests of `usmap_io.py`, `usmap_offline.py` and `usmap_merge.py` (no game
-needed).
+`python -I tests\test_usmap.py`: offline tests of `usmap_io.py`, `usmap_offline.py`, `usmap_merge.py` and the address
+search of `usmap_live.py` (no game needed).
 
 ## Notes
 
 - The game's engine is changed against UE 5.7: UStruct has 0x50 more bytes after ChildProperties, FField has Next
   and Owner swapped, and the FFieldClass name is at 0x30. `usmap_live.py` reads with that layout, the same one as
   UE4SS's custom config for the game ([UE4SS-RE/RE-UE4SS#1484](https://github.com/UE4SS-RE/RE-UE4SS/pull/1484)).
-- UE4SS's mapping dump with Blueprint types crashes this game on enum properties without an enum
-  ([UE4SS-RE/RE-UE4SS#1483](https://github.com/UE4SS-RE/RE-UE4SS/issues/1483)). These properties are written as their
-  number type here.
+- The game has enum properties without an enum ([UE4SS-RE/RE-UE4SS#1483](https://github.com/UE4SS-RE/RE-UE4SS/issues/1483)).
+  These properties are written as their number type here, as UE4SS does since its build 1195.
+- GUObjectArray and the FName block table move with each game build (by about 0x75000 in Steam build 26367565), so
+  `usmap_live.py` finds them for the running build and stops with a message when it cannot.
 - UAssetGUI: run it one at a time when you test mapping files. Eight parallel runs gave wrong results (640 exports
   not read of 2,651, against 8 one at a time).
 

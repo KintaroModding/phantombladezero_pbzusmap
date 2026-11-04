@@ -9,7 +9,7 @@
        dist\<usmapName>.usmap (report: dist\<usmapName>.merge.txt).
     5. dist\<folder>_<version>.zip with the mapping file, and dist\SHA256SUMS.txt.
     The native dump is a mapping file of the game's native types (src\usmap_live.py --native-only in the running
-    game, or UE4SS's Ctrl+Num6 with DumpUSMAP(false)); live dumps are optional (src\usmap_live.py with the game at
+    game, or UE4SS's DumpUSMAP(false)); live dumps are optional (src\usmap_live.py with the game at
     some place: they add the runtime flags and the transient types). The defaults come from the shared _tools folder
     of the modding base folder ($env:UE5_TOOLS overrides it) and its gamedata\<game>\game.json.
 .EXAMPLE

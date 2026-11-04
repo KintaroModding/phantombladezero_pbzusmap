@@ -5,6 +5,6 @@
   "summary": "Full mapping file (.usmap) for Phantom Blade Zero: every native type plus every Blueprint class, struct and enum of the game's packages.",
   "games": ["phantom-blade-zero"],
   "tags": ["tools"],
-  "gameVersions": ["Release (Steam build 26266538)"],
+  "gameVersions": ["Steam build 26367565"],
   "cover": "docs/cover.png"
 }

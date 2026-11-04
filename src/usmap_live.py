@@ -1,23 +1,24 @@
 """Writes a mapping file (.usmap) from the running Phantom Blade Zero, read from outside (read-only), with the
 Blueprint types that are loaded at that moment.
 
-Why: UE4SS's own dump with Blueprint types (DumpUSMAP(), Keybinds Ctrl+Num6) crashes this game on enum properties
-without an enum (UE4SS-RE/RE-UE4SS#1483). This script does what UE4SS's USMapGenerator does
-(UE4SS/src/USMapGenerator/Generator.cpp, commit cdbc0b66: the same objects, property types, name rules, PPTH and
-EATR), with three changes:
+Why: UE4SS's own dump with Blueprint types crashed this game on enum properties without an enum until its build 1195
+(UE4SS-RE/RE-UE4SS#1483). This script does what UE4SS's USMapGenerator does (UE4SS/src/USMapGenerator/Generator.cpp,
+commit cdbc0b66: the same objects, property types, name rules, PPTH and EATR), with three changes:
 - an FEnumProperty without an enum is written as its underlying number type (the game stores such a value as a
   plain number); a ByteProperty without an enum is a ByteProperty, as in UE4SS;
 - class default objects (Default__Class, Default__ScriptStruct) are left out;
 - a struct whose property chain does not read cleanly (the game changed it during the read) is left out and named.
 
 It opens the process with PROCESS_VM_READ and PROCESS_QUERY_INFORMATION only and writes nothing into it. The
-layout is Phantom Blade Zero's (Steam build 26266538; the same layout as UE4SS's custom config for the game,
-UE4SS-RE/RE-UE4SS#1484): UStruct has 0x50 more bytes after ChildProperties, FField has Next and Owner swapped, the
-FFieldClass name is at 0x30. The addresses of GUObjectArray and the FName block table are RVAs of that build and
-are checked before use.
+layout is Phantom Blade Zero's (Steam builds 26266538 and 26367565; the same layout as UE4SS's custom config for the
+game, UE4SS-RE/RE-UE4SS#1484): UStruct has 0x50 more bytes after ChildProperties, FField has Next and Owner swapped,
+the FFieldClass name is at 0x30. GUObjectArray and the FName block table move with each game build, so they are found
+for the running build: GUObjectArray by the pattern and the arithmetic of UE4SS's signature for the game, the block
+table as the first pointer in the exe's writable data to a block that starts with "None".
 
 Usage: python -I usmap_live.py <exe path of the process> <out.usmap> [--native-only]
 """
+import re
 import struct
 import sys
 import time
@@ -28,9 +29,9 @@ from process_memory import Mem, find_pid, i32, module_base, q  # noqa: E402
 import usmap_io  # noqa: E402
 from usmap_io import CONTAINERS, SIMPLE, usmap_name  # noqa: E402
 
-# Steam build 26266538 (image base 0x140000000): GUObjectArray 0x14ddb3c40, FName block table 0x14dd11ad0.
-GUOBJECTARRAY_RVA = 0xDDB3C40
-NAME_BLOCKS_RVA = 0xDD11AD0
+# UE4SS's signature for this game: lea rcx, [GUObjectArray + 0x10] at the match. Section flags: code, writable.
+GUOBJECTARRAY_PATTERN = "48 8D 0D ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? C6 05 ? ? ? ? 01"
+SECTION_EXECUTE, SECTION_WRITE = 0x20000000, 0x80000000
 NAME_BLOCK_BYTES = 0x20000
 
 # TUObjectArray in this game's order (at GUObjectArray + 0x10): NumChunks 0x4, Objects 0x8, NumElements 0x10.
@@ -60,6 +61,54 @@ class Broken(Exception):
     pass
 
 
+def exe_sections(exe):
+    """(virtual address, virtual size, file offset, file size, flags) of each section of the exe file."""
+    with open(exe, "rb") as f:
+        head = f.read(0x2000)
+    pe = struct.unpack_from("<I", head, 0x3C)[0]
+    count, optional = struct.unpack_from("<H", head, pe + 6)[0], struct.unpack_from("<H", head, pe + 20)[0]
+    sections = []
+    for i in range(count):
+        entry = pe + 24 + optional + 40 * i
+        vsize, va, rsize, raw = struct.unpack_from("<IIII", head, entry + 8)
+        sections.append((va, vsize, raw, rsize, struct.unpack_from("<I", head, entry + 36)[0]))
+    return sections
+
+
+def find_guobjectarray_rva(exe, sections):
+    """The address that UE4SS's signature finds; the pattern must match exactly once in the exe's code."""
+    tokens = GUOBJECTARRAY_PATTERN.split()
+    regex = re.compile(b"".join(b"." if t == "?" else re.escape(bytes([int(t, 16)])) for t in tokens), re.S)
+    data = Path(exe).read_bytes()
+    hits = []
+    for va, _, raw, rsize, flags in sections:
+        if flags & SECTION_EXECUTE:
+            hits += [(va + m.start() - raw, m.start()) for m in regex.finditer(data, raw, raw + rsize)]
+    if len(hits) != 1:
+        sys.exit(f"the GUObjectArray pattern matches {len(hits)} times in {exe}: this game build needs a look")
+    rva, offset = hits[0]
+    return rva + 7 + struct.unpack_from("<i", data, offset + 3)[0] - 0x10
+
+
+def find_name_blocks_rva(mem, base, sections):
+    """The FName block table: the first pointer in the exe's writable data to a block that starts with "None"."""
+    for va, vsize, _, _, flags in sections:
+        if not flags & SECTION_WRITE or flags & SECTION_EXECUTE:
+            continue
+        seen = set()
+        for start in range(0, vsize, 0x100000):
+            part = mem.read(base + va + start, min(0x100000, vsize - start))
+            for i in range(0, len(part or b"") - 7, 8):
+                value = q(part, i)
+                if value in seen or not 0x10000 < value < 0x7FFFFFFFFFFF:
+                    continue
+                seen.add(value)
+                head = mem.read(value, 6)
+                if head and head[2:6] == b"None" and struct.unpack_from("<H", head)[0] >> 6 == 4:
+                    return va + start + i
+    sys.exit("no FName block table in the exe's writable data: this game build needs a look")
+
+
 class Game:
     def __init__(self, exe):
         pid = find_pid(exe)
@@ -69,20 +118,19 @@ class Game:
         base = module_base(pid, exe)
         if not base:
             sys.exit("the exe module was not found in the process")
-        self.guo = base + GUOBJECTARRAY_RVA
-        table = base + NAME_BLOCKS_RVA
+        sections = exe_sections(exe)
+        self.guo = base + find_guobjectarray_rva(exe, sections)
+        self.name_table = base + find_name_blocks_rva(self.mem, base, sections)
         self.blocks = []
         for k in range(8192):
-            b = q(self.mem.read(table + 8 * k, 8), 0)
+            b = q(self.mem.read(self.name_table + 8 * k, 8), 0)
             if not b:
                 break
             self.blocks.append(b)
         self.block_data = {}
-        head = self.mem.read(self.blocks[0], 6) if self.blocks else None
-        if not head or head[2:6] != b"None" or struct.unpack_from("<H", head)[0] >> 6 != 4:
-            sys.exit(f"no FName block table at {table:#x} (another game build? see the RVAs at the top)")
         self.names = {}
-        print(f"pid {pid}, exe at {base:#x}, GUObjectArray {self.guo:#x}, {len(self.blocks)} name blocks")
+        print(f"pid {pid}, exe at {base:#x}, GUObjectArray {self.guo:#x}, FName block table {self.name_table:#x}, "
+              f"{len(self.blocks)} name blocks")
 
     def read(self, address, size):
         data = self.mem.read(address, size)

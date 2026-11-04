@@ -5,9 +5,11 @@
 Checks: usmap_io writes and reads back every type kind, the extensions and a missing super; usmap_offline.py
 applies UE4SS's rules (Byte with an enum, an enum property without an enum, '::' names, schema index, sorted
 input); usmap_merge.py keeps a native type over an asset type, ignores case, and its last pass fixes undefined
-enums, unnamed structs and missing super types.
+enums, unnamed structs and missing super types; usmap_live.py finds GUObjectArray and the FName block table (with a
+small fake exe and fake memory).
 """
 import json
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ SRC = ROOT / "src"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SRC))
 import usmap_io  # noqa: E402
+import usmap_live  # noqa: E402
 from usmap_io import Enum, Prop, Struct, Usmap  # noqa: E402
 
 failures = []
@@ -128,12 +131,68 @@ def test_merge(tmp):
     check("each name once", len(m.structs) == len(s) and m.null_names == 0)
 
 
+class FakeMemory:
+    """Stands in for the running game: reads from {address: bytes}."""
+
+    def __init__(self, areas):
+        self.areas = areas
+
+    def read(self, address, size):
+        for start, data in self.areas.items():
+            if start <= address and address + size <= start + len(data):
+                return data[address - start:address - start + size]
+        return None
+
+
+def fake_exe(path, code):
+    """A small PE file: one code section at RVA 0x1000 (file offset 0x400), one writable section at RVA 0x5000."""
+    head = bytearray(0x400)
+    head[:2] = b"MZ"
+    struct.pack_into("<I", head, 0x3C, 0x80)
+    head[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", head, 0x80 + 6, 2)
+    struct.pack_into("<H", head, 0x80 + 20, 0xF0)
+    table = 0x80 + 24 + 0xF0
+    struct.pack_into("<IIII", head, table + 8, len(code), 0x1000, len(code), 0x400)
+    struct.pack_into("<I", head, table + 36, 0x60000020)
+    struct.pack_into("<IIII", head, table + 40 + 8, 0x1000, 0x5000, 0, 0)
+    struct.pack_into("<I", head, table + 40 + 36, 0xC0000040)
+    Path(path).write_bytes(bytes(head) + code)
+
+
+def test_live_addresses(tmp):
+    # pattern at RVA 0x1010: lea rcx, [rip + 0x4000]; next instruction at RVA 0x1017, so the result is 0x5017 - 0x10.
+    match = bytes.fromhex("488D0D00400000" "E800000000" "E811111111" "E822222222" "C6053333333301")
+    exe = tmp / "fake.exe"
+    fake_exe(exe, b"\x90" * 0x10 + match + b"\x90" * 0x10)
+    sections = usmap_live.exe_sections(exe)
+    check("exe_sections reads both sections", [s[0] for s in sections] == [0x1000, 0x5000])
+    check("GUObjectArray by the signature's arithmetic", usmap_live.find_guobjectarray_rva(exe, sections) == 0x5007)
+    fake_exe(exe, match + match)
+    try:
+        usmap_live.find_guobjectarray_rva(exe, usmap_live.exe_sections(exe))
+        check("two pattern matches stop the script", False)
+    except SystemExit:
+        check("two pattern matches stop the script", True)
+    base = 0x140000000
+    block = 0x7000000
+    writable = bytearray(0x1000)
+    struct.pack_into("<Q", writable, 0x20, 0x7000040)  # a pointer to something else comes first
+    struct.pack_into("<Q", writable, 0x28, block)
+    memory = FakeMemory({base + 0x5000: bytes(writable),
+                         block: struct.pack("<H", 4 << 6) + b"None",
+                         0x7000040: struct.pack("<H", 5 << 6) + b"Other"})
+    check("FName block table: the first pointer to a block with None",
+          usmap_live.find_name_blocks_rva(memory, base, sections) == 0x5028)
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         test_roundtrip(tmp)
         test_offline(tmp)
         test_merge(tmp)
+        test_live_addresses(tmp)
     print(f"\n{len(failures)} failed" if failures else "\nall passed")
     return 1 if failures else 0
 
